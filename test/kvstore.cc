@@ -1,9 +1,12 @@
 #include "kvstore.h"
+#include "utils.h"
 #include <string>
 #include <filesystem>
 #include <iostream>
 #include <fstream>
 #include <list>
+#include <vector>
+#include <cstdint>
 namespace fs = std::filesystem;
 KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(dir, vlog)
 {
@@ -39,7 +42,7 @@ KVStore::~KVStore()
 // else return false
 bool KVStore::testMemTableSize()
 {
-    if (MemTable->get_length() <= 1)
+    if (MemTable->get_length() < 2)
     {
         return false;
     }else{
@@ -51,8 +54,30 @@ bool KVStore::testMemTableSize()
 void KVStore::saveToVlog()
 {
     std::string filename = "../data/vlog/" + vlog + ".vlog";
-    std::ofstream file(filename);
+    std::ofstream file(filename,std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "无法打开文件" << std::endl;
+        return;
+    }
     std::list<std::pair<unsigned long, std::string>> data_to_save = MemTable->traverse();
+    for (const auto& pair : data_to_save) {
+        unsigned int vlen = pair.second.length();
+        unsigned long key = pair.first;
+        std::string value = pair.second;
+        file.put(0xff);
+        std::vector<unsigned char> binary_data;
+        binary_data.reserve(sizeof(unsigned long) + sizeof(unsigned int) + vlen);
+        binary_data.insert(binary_data.end(), reinterpret_cast<const unsigned char*>(&key), reinterpret_cast<const unsigned char*>(&key) + sizeof(unsigned long));
+        binary_data.insert(binary_data.end(), reinterpret_cast<const unsigned char*>(&vlen), reinterpret_cast<const unsigned char*>(&vlen) + sizeof(unsigned int));
+        binary_data.insert(binary_data.end(), pair.second.begin(), pair.second.end());
+        // calc the checksum
+        uint16_t crc = utils::crc16(binary_data);
+        file.write(reinterpret_cast<const char*>(&crc), sizeof(crc));
+        file.write(reinterpret_cast<const char*>(&key), sizeof(key));
+        file.write(reinterpret_cast<const char*>(&vlen), sizeof(vlen));
+        file.write(value.data(), vlen);
+    }
+
 }
 
 /**
