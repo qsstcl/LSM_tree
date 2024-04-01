@@ -12,6 +12,8 @@ private:
 
 	std::string vlog;
 
+	unsigned int level;
+
 	unsigned long write_vlog_index;
 
 	unsigned long sstable_index;
@@ -23,8 +25,6 @@ public:
 	bool testMemTableSize();
 
 	void saveToVlog();
-
-	void saveToSSTable();
 
 	void put(uint64_t key, const std::string &s) override;
 

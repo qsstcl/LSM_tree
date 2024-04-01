@@ -53,6 +53,7 @@ public:
 	void put(key_type key, const value_type &val);
 	//std::optional<value_type> get(key_type key) const;
 	std::string get(key_type key) const;
+	void scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, std::string>> &list);
 	int get_length();
 	// for hw1 only
 	int query_distance(key_type key) const;

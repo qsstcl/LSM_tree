@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/test.dir/kvstore.cc.o CMakeFiles/test.dir/main.cc.o CMakeFiles/test.dir/skiplist.cc.o -o test 

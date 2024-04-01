@@ -9,7 +9,14 @@ private:
     skiplist::skiplist_type* MemTable = new skiplist::skiplist_type(0.37);
 
     std::string dir;
+
     std::string vlog;
+
+    unsigned int level;
+
+    unsigned long write_vlog_index;
+
+    unsigned long sstable_index;
 public:
     KVStore(const std::string &dir, const std::string &vlog);
 
