@@ -19,6 +19,51 @@ struct KeyOffsetVlen {
 bool testBloomFilter(){
     return true;
 }
+void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
+{
+    for (auto single_result : result_vector)
+    {
+        if (single_result.key == result.key && result.time_stamp > single_result.time_stamp)
+        {
+            single_result = result;
+            break; // 找到匹配的键后立即结束循环
+        }else if (single_result.key == result.key)
+        {
+            break;
+        }else
+        {
+            result_vector.push_back(result);
+        }
+        
+    }
+    
+}
+
+void PushBackList(std::vector<KeyOffsetVlen> &result_vector,std::list<std::pair<uint64_t, std::string>> &list,std::ifstream& file)
+{
+    for (const auto& result : result_vector) {
+        // 检查列表中是否已经存在相同的键
+        bool keyExists = false;
+        for (const auto& pair : list) {
+            if (pair.first == result.key) {
+                keyExists = true;
+                break;
+            }
+        }
+    
+        // 如果列表中不存在相同的键，则将键值对插入到列表中
+        if (!keyExists) {
+            file.seekg(result.offset);
+            std::string value(result.vlen,'\0');
+            file.read(&value[0],result.vlen);
+            list.push_back(std::make_pair(result.key, value));
+        }
+    }
+    list.sort([](const std::pair<uint64_t, std::string>& a, const std::pair<uint64_t, std::string>& b) {
+        return a.first < b.first;
+    });
+}
+
 KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(dir, vlog)
 {
     this->dir = dir;
@@ -363,14 +408,13 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
 {
     //scan memTable, put all values between key1 and key2 into list
     MemTable->scan(key1,key2,list);
+    std::vector<KeyOffsetVlen> result_vector;
     //scan sst files level by level, encountering the same key ,compare the time_stamp
     for (unsigned int i = 0; i <= level; i++)
     {
         std::string folder_path = "../data/level"+std::to_string(i);
 
         // 遍历文件夹中的文件
-        //load all key and offset to 
-        std::vector<KeyOffsetVlen> result_vector;
         for (const auto& entry : fs::directory_iterator(folder_path)) {
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().filename().string();
@@ -389,71 +433,80 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                     continue;
                 }
                 //search range is under this sst
-                unsigned long key1_index;
-                unsigned long key2_index;
+                unsigned long key1_index=0;
+                unsigned long key2_index=0;
                 unsigned long first_key_index = 8224;
                 unsigned long last_key_index = first_key_index + 20 * (key_number-1);
-                unsigned long mid_key;
-                //find the key1_index using binary search
-                while (first_key_index <= last_key_index) {
-                    unsigned long mid_key_index = (first_key_index + last_key_index) / 2;
-                    //get first and last key
-                    sst_file.seekg(first_key_index);
-                    unsigned long first_key;
-                    sst_file.read(reinterpret_cast<char*>(&first_key), sizeof(first_key));
-                    sst_file.seekg(last_key_index);
-                    unsigned long last_key;
-                    sst_file.read(reinterpret_cast<char*>(&last_key), sizeof(last_key));
-                    //if (mid_key_index - first_key_index)%20 != 0 ,meaning it does not correspond to a key, complete it
-
-                    if ((mid_key_index - first_key_index)%20 != 0)
+                unsigned long search_key;
+                unsigned long search_index = first_key_index;
+                //find the key1_index
+                while (search_index <= last_key_index)
+                {
+                    sst_file.seekg(search_index);
+                    sst_file.read(reinterpret_cast<char*>(&search_key), sizeof(search_key));
+                    if (search_key < key1)
                     {
-                        mid_key_index += (20-(mid_key_index - first_key_index)%20);
-                    }
-                    sst_file.seekg(mid_key_index);
-                    sst_file.read(reinterpret_cast<char*>(&mid_key), sizeof(mid_key));
-                    if (mid_key_index == last_key_index)
-                    {
-                        if (key1 == first_key || key1 == last_key)
-                        {
-                            if (key1 == first_key)
-                            {
-                                
-                                sst_file.seekg(first_key_index+8);
-                            }else {
-                                sst_file.seekg(last_key_index+8);
-                            }
-                            break;
-                        }else{
-                            break;
-                        }
-                    }        
-
-                    if (mid_key == key)
-                    {
-                        is_found = true;
-                        KeyOffsetVlen result;
-                        result.time_stamp = time_stamp;
-                        result.key = mid_key;
-                        unsigned long offset;
-                        sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                        unsigned int vlen;
-                        sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
-                        result.offset = offset;
-                        result.vlen = vlen;
-                        result_vector.push_back(result);
-                        break;
-                    }else if(mid_key < key){
-                        first_key_index = mid_key_index + 20;
+                        search_index += 20;
                     }else{
-                        last_key_index = mid_key_index -20;
+                        key1_index = search_index;
+                        break;
                     }
                 }
-
+                //all the keys in sst are smaller than key1
+                if (key1_index == 0)
+                {
+                    continue;
+                }
+                
+                //conitinue to find the key2_index
+                while (search_index <= last_key_index)
+                {
+                    sst_file.seekg(search_index);
+                    sst_file.read(reinterpret_cast<char*>(&search_key), sizeof(search_key));
+                    if (search_key <= key2)
+                    {
+                        search_index += 20;
+                    }else{
+                        key2_index = search_index - 20;
+                        break;
+                    }
+                }
+                //key2 is beyond range
+                if (search_index == last_key_index + 20)
+                {
+                    key2_index = last_key_index;
+                }
+                //key2 is smaller than the smallest key in this sst
+                if (key2_index == first_key_index - 20)
+                {
+                    continue;
+                }
+                sst_file.seekg(key1_index);
+                search_index = key1_index;
+                while (search_index <= key2_index)
+                {
+                    KeyOffsetVlen result;
+                    result.time_stamp = time_stamp;
+                    unsigned long key;
+                    sst_file.read(reinterpret_cast<char*>(&key), sizeof(key));
+                    unsigned long offset;
+                    sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+                    unsigned int vlen;
+                    sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                    result.offset = offset;
+                    result.vlen = vlen;
+                    myPushBack(result_vector,result);
+                    search_index += 20;
+                }
+                
                 
             }
         }
     }
+    std::string filename = "../data/" + vlog + ".vlog";
+    std::ifstream file(filename,std::ios::binary);
+
+    PushBackList(result_vector,list,file);
 
 }
 
