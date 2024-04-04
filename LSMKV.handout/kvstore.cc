@@ -21,21 +21,27 @@ bool testBloomFilter(){
 }
 void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
 {
-    for (auto single_result : result_vector)
-    {
-        if (single_result.key == result.key && result.time_stamp > single_result.time_stamp)
+    if (!result_vector.empty()){
+        for (auto single_result : result_vector)
         {
-            single_result = result;
-            break; // 找到匹配的键后立即结束循环
-        }else if (single_result.key == result.key)
-        {
-            break;
-        }else
-        {
-            result_vector.push_back(result);
+            if (single_result.key == result.key && result.time_stamp > single_result.time_stamp)
+            {
+                single_result = result;
+                break; // 找到匹配的键后立即结束循环
+            }else if (single_result.key == result.key)
+            {
+                break;
+            }else
+            {
+                result_vector.push_back(result);
+            }
+
         }
-        
+    }else{
+        result_vector.push_back(result);
     }
+
+
     
 }
 
@@ -50,7 +56,7 @@ void PushBackList(std::vector<KeyOffsetVlen> &result_vector,std::list<std::pair<
                 break;
             }
         }
-    
+
         // 如果列表中不存在相同的键，则将键值对插入到列表中
         if (!keyExists) {
             file.seekg(result.offset);
@@ -68,33 +74,61 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
 {
     this->dir = dir;
     this->vlog = vlog;
-	this->write_vlog_index = 0;
 	this->sstable_index = 0;
     this->level = 0;
-    std::string sst_folder_name = ".."+dir+"/level0";
+    this->tail = 0;
+    this->head = 0;
+    std::string sst_folder_name = "../"+dir+"/level0";
     if (fs::create_directories(sst_folder_name))
     {
         std::cout << "succsses creating the folder"<< std::endl;
     }else{
+        //the directories already exist
         std::cerr << "failed to creat the folder"<< std::endl;
+        int file_count = 0;
+        for (const auto& entry : fs::directory_iterator(sst_folder_name)) {
+            if (entry.is_regular_file()) {
+                ++file_count;
+            }
+        }
+        this->sstable_index = file_count + 1;
     }
 
-    std::string vlog_folder_name = ".."+vlog;
+    std::string vlog_folder_name = "../data/"+vlog;
     if (fs::create_directories(vlog_folder_name))
     {
         std::cout << "succsses creating the folder"<< std::endl;
     }else{
         std::cerr << "failed to creat the folder"<< std::endl;
     }
-    std::string filename = "../" + vlog + ".vlog";
+    std::string filename = "../data/" + vlog + ".vlog";
 
-    // 创建文件流对象并打开文件
-    std::ofstream file(filename);
+    if (fs::exists(filename)) {
+        // 文件存在，打开文件
+        std::cout << "File exists, opening it..." << std::endl;
+        std::ofstream file(filename, std::ios::app); // 追加模式打开文件
+        unsigned long file_size = fs::file_size(filename);
+        this->head = file_size;
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file" << std::endl;
+            return;
+        }
+    } else {
+        // 文件不存在，创建文件
+        std::cout << "File does not exist, creating it..." << std::endl;
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Failed to create file" << std::endl;
+            return;
+        }
+    }
 
 }
 
 KVStore::~KVStore()
 {
+    saveToVlog();
+    delete MemTable;
 }
 // test if the memtable is oversized
 // if oversized, return true
@@ -144,14 +178,15 @@ void KVStore::saveToVlog()
             max_key = pair.first;
         }
     }
-    char *bloom_filter = new char;
-    *bloom_filter=0;
-    
+
     sst_file.write(reinterpret_cast<const char*>(&time_stamp), sizeof(time_stamp));
     sst_file.write(reinterpret_cast<const char*>(&length), sizeof(length));
     sst_file.write(reinterpret_cast<const char*>(&min_key), sizeof(min_key));
     sst_file.write(reinterpret_cast<const char*>(&max_key), sizeof(max_key));
-    sst_file.write(bloom_filter,8192);
+    char zero_byte = 0;
+    for (std::size_t i = 0; i < 8192; ++i) {
+        sst_file.write(&zero_byte, sizeof(zero_byte));
+    }
     for (const auto& pair : data_to_save) {
         //write data to vlog file
         unsigned int vlen = pair.second.length();
@@ -214,6 +249,7 @@ void KVStore::put(uint64_t key, const std::string &s)
         saveToVlog();
         delete MemTable;
         MemTable = new skiplist::skiplist_type(0.37);
+        put(key,s);
     }
 }
 /**
@@ -243,16 +279,16 @@ std::string KVStore::get(uint64_t key)
             // 遍历文件夹中的文件
             for (const auto& entry : fs::directory_iterator(folder_path)) {
                 if (entry.is_regular_file()) {
-                    std::string filename = entry.path().filename().string();
+                    std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
                     unsigned long time_stamp ;
                     unsigned long key_number ;
-                    unsigned long max_key ;
                     unsigned long min_key ;
+                    unsigned long max_key ;
                     sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
                     sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                     sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
+                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                     //if key > max_key or key < min_key ,then go to next sst
                     if (key > max_key || key < min_key)
                     {
@@ -397,6 +433,23 @@ bool KVStore::del(uint64_t key)
  */
 void KVStore::reset()
 {
+    delete MemTable;
+    MemTable = new skiplist::skiplist_type(0.37);
+    std::string data_folder = "../data";
+    
+    // 检查 data 文件夹是否存在
+    if (!fs::exists(data_folder)) {
+        std::cerr << "Data folder does not exist" << std::endl;
+        return;
+    }
+    
+    // 删除 data 文件夹及其内容
+    try {
+        fs::remove_all(data_folder);
+        std::cout << "Data folder reset successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to reset data folder: " << e.what() << std::endl;
+    }
 }
 
 /**

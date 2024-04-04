@@ -12,6 +12,10 @@ private:
 
 	std::string vlog;
 
+	unsigned long tail;
+
+	unsigned long head;
+
 	unsigned int level;
 
 	unsigned long write_vlog_index;
