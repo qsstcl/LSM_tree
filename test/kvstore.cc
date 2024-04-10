@@ -1,5 +1,6 @@
 #include "kvstore.h"
 #include "utils.h"
+#include "MurmurHash3.h"
 #include <string>
 #include <filesystem>
 #include <iostream>
@@ -16,9 +17,19 @@ struct KeyOffsetVlen {
     unsigned long offset;
     unsigned int vlen;
 };
-bool testBloomFilter(){
+//test if key exist in this bloom filter
+bool testBloomFilter(std::vector<char> &file_bloom_filter,uint64_t key){
+    std::uint32_t hashValue[4];
+    MurmurHash3_x64_128(&key, sizeof(key), 1, hashValue);
+    for (int j = 0; j < 4; ++j) {
+        int index = hashValue[j] % 8192;
+        if (!file_bloom_filter[index]) {
+            return false;
+        }
+    }
     return true;
 }
+
 void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
 {
     if (!result_vector.empty()){
@@ -40,6 +51,7 @@ void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
     }else{
         result_vector.push_back(result);
     }
+
 
 
 }
@@ -77,6 +89,8 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
     this->level = 0;
     this->tail = 0;
     this->head = 0;
+    bloom_filter.resize(8192);
+    bloom_filter.assign(8192, false);
     std::string sst_folder_name = "../"+dir+"/level0";
     if (fs::create_directories(sst_folder_name))
     {
@@ -119,7 +133,11 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
 
 KVStore::~KVStore()
 {
-    saveToVlog();
+    if(this->MemTable->get_length())
+    {
+        saveToVlogSST();
+    }
+
     delete MemTable;
 }
 // test if the memtable is oversized
@@ -127,7 +145,7 @@ KVStore::~KVStore()
 // else return false
 bool KVStore::testMemTableSize()
 {
-    if (MemTable->get_length() < 5)
+    if (MemTable->get_length() <= 407)
     {
         return false;
     }else{
@@ -136,9 +154,10 @@ bool KVStore::testMemTableSize()
 
 }
 //save memTable data to Vlog
-void KVStore::saveToVlog()
+void KVStore::saveToVlogSST()
 {
-    std::string filename = "../data/" + vlog + ".vlog";
+    //********write header to file
+    std::string filename = "../" + vlog + ".vlog";
     std::string sst_filename = "../data/level0/" + std::to_string(sstable_index) + ".sst";
     std::ofstream file(filename,std::ios::binary | std::ios::app);
     std::ofstream sst_file(sst_filename,std::ios::binary);
@@ -175,10 +194,32 @@ void KVStore::saveToVlog()
     sst_file.write(reinterpret_cast<const char*>(&length), sizeof(length));
     sst_file.write(reinterpret_cast<const char*>(&min_key), sizeof(min_key));
     sst_file.write(reinterpret_cast<const char*>(&max_key), sizeof(max_key));
-    char zero_byte = 0;
-    for (std::size_t i = 0; i < 8192; ++i) {
-        sst_file.write(&zero_byte, sizeof(zero_byte));
+
+    //*******write header to file
+
+    //**write BloomFilter to file
+    /**
+    * Example
+    long long key = 103122;
+    unsigned int hash[4] = {0};
+    MurmurHash3_x64_128(&key, sizeof(key), 1, hash);
+    */
+    for (auto keyValuePair : data_to_save)
+    {
+        std::uint32_t hashValue[4];
+        MurmurHash3_x64_128(&keyValuePair.first, sizeof(keyValuePair.first), 1, hashValue);
+        for (int j = 0; j < 4; ++j) {
+            int index = hashValue[j] % 8192;
+            bloom_filter[index] = 1;
+        }
     }
+    for (auto value : bloom_filter) {
+        sst_file.write(&value, sizeof(value));
+    }
+
+    //******write BloomFilter to sst file
+
+    //******write <Key,Offset,Vlen>to sst file, <Magic,Checksum,Key,Vlen,Valut>to vlog files
     for (const auto& pair : data_to_save) {
         //write data to vlog file
         unsigned int vlen = pair.second.length();
@@ -222,7 +263,7 @@ void KVStore::saveToVlog()
 
 
     }
-
+    //******write <Key,Offset,Vlen>to sst file
 }
 
 
@@ -238,7 +279,7 @@ void KVStore::put(uint64_t key, const std::string &s)
     {
         MemTable->put(key,s);
     }else{
-        saveToVlog();
+        saveToVlogSST();
         delete MemTable;
         MemTable = new skiplist::skiplist_type(0.37);
         put(key,s);
@@ -271,23 +312,33 @@ std::string KVStore::get(uint64_t key)
             // 遍历文件夹中的文件
             for (const auto& entry : fs::directory_iterator(folder_path)) {
                 if (entry.is_regular_file()) {
-                    std::string filename = entry.path().filename().string();
+                    std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
                     unsigned long time_stamp ;
                     unsigned long key_number ;
-                    unsigned long max_key ;
                     unsigned long min_key ;
+                    unsigned long max_key ;
                     sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
                     sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                     sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
+                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                     //if key > max_key or key < min_key ,then go to next sst
                     if (key > max_key || key < min_key)
                     {
                         continue;
                     }
                     //else make a binary search
-                    if (testBloomFilter())
+                    //get a bool vector
+                    char byte;
+                    std::vector<char> file_bloom_filter;
+                    for (int j = 0; j < 8192; j++)
+                    {
+                        sst_file.read(reinterpret_cast<char*>(&byte), sizeof(byte));
+                        file_bloom_filter.push_back(byte);
+                    }
+
+
+                    if (testBloomFilter(file_bloom_filter,key))
                     {
                         //if passed the bloom filter test
                         unsigned long first_key_index = 8224;
@@ -462,16 +513,16 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
         // 遍历文件夹中的文件
         for (const auto& entry : fs::directory_iterator(folder_path)) {
             if (entry.is_regular_file()) {
-                std::string filename = entry.path().string();
+                std::string filename = entry.path().filename().string();
                 std::ifstream sst_file(filename,std::ios::binary);
                 unsigned long time_stamp ;
                 unsigned long key_number ;
-                unsigned long min_key ;
                 unsigned long max_key ;
+                unsigned long min_key ;
                 sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
                 sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
                 sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
+                sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
                 //if search range is beyond this sst,then go to next one
                 if (key1 > max_key || key2 < min_key)
                 {
@@ -538,7 +589,6 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                     sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
                     unsigned int vlen;
                     sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
-                    result.key = key;
                     result.offset = offset;
                     result.vlen = vlen;
                     myPushBack(result_vector,result);

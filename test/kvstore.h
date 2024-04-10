@@ -2,6 +2,7 @@
 
 #include "kvstore_api.h"
 #include "skiplist.h"
+#include <vector>
 class KVStore : public KVStoreAPI
 {
     // You can add your implementation here
@@ -21,6 +22,8 @@ private:
     unsigned long write_vlog_index;
 
     unsigned long sstable_index;
+
+    std::vector<char> bloom_filter;
 public:
     KVStore(const std::string &dir, const std::string &vlog);
 
@@ -28,7 +31,7 @@ public:
 
     bool testMemTableSize();
 
-    void saveToVlog();
+    void saveToVlogSST();
 
     void put(uint64_t key, const std::string &s) override;
 
