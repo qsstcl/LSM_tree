@@ -2,6 +2,7 @@
 
 #include "kvstore_api.h"
 #include "skiplist.h"
+#include <vector>
 class KVStore : public KVStoreAPI
 {
 	// You can add your implementation here
@@ -22,6 +23,10 @@ private:
 
 	unsigned long sstable_index;
 
+	std::string vlog_filename;
+
+	std::string sst_folder_filename;
+
 	std::vector<char> bloom_filter;
 public:
 	KVStore(const std::string &dir, const std::string &vlog);
@@ -35,6 +40,8 @@ public:
 	void put(uint64_t key, const std::string &s) override;
 
 	std::string get(uint64_t key) override;
+
+	uint64_t GetKeyOffset(uint64_t key);
 
 	bool del(uint64_t key) override;
 

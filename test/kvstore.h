@@ -5,43 +5,49 @@
 #include <vector>
 class KVStore : public KVStoreAPI
 {
-    // You can add your implementation here
+	// You can add your implementation here
 private:
-    skiplist::skiplist_type* MemTable = new skiplist::skiplist_type(0.37);
+	skiplist::skiplist_type* MemTable = new skiplist::skiplist_type(0.37);
 
-    std::string dir;
+	std::string dir;
 
-    std::string vlog;
+	std::string vlog;
 
-    unsigned long tail;
+	unsigned long tail;
 
-    unsigned long head;
+	unsigned long head;
 
-    unsigned int level;
+	unsigned int level;
 
-    unsigned long write_vlog_index;
+	unsigned long write_vlog_index;
 
-    unsigned long sstable_index;
+	unsigned long sstable_index;
 
-    std::vector<char> bloom_filter;
+	std::string vlog_filename;
+
+	std::string sst_folder_filename;
+
+	std::vector<char> bloom_filter;
 public:
-    KVStore(const std::string &dir, const std::string &vlog);
+	KVStore(const std::string &dir, const std::string &vlog);
 
-    ~KVStore();
+	~KVStore();
 
-    bool testMemTableSize();
+	bool testMemTableSize();
 
-    void saveToVlogSST();
+	void saveToVlogSST();
 
-    void put(uint64_t key, const std::string &s) override;
+	void put(uint64_t key, const std::string &s) override;
 
-    std::string get(uint64_t key) override;
+	std::string get(uint64_t key) override;
 
-    bool del(uint64_t key) override;
+	uint64_t GetKeyOffset(uint64_t key);
 
-    void reset() override;
+	bool del(uint64_t key) override;
 
-    void scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, std::string>> &list) override;
+	void reset() override;
 
-    void gc(uint64_t chunk_size) override;
+	void scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, std::string>> &list) override;
+
+	void gc(uint64_t chunk_size) override;
 };

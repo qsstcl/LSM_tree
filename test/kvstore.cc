@@ -45,6 +45,7 @@ void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
             }else
             {
                 result_vector.push_back(result);
+                break;
             }
 
         }
@@ -53,7 +54,7 @@ void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
     }
 
 
-
+    
 }
 
 void PushBackList(std::vector<KeyOffsetVlen> &result_vector,std::list<std::pair<uint64_t, std::string>> &list,std::ifstream& file)
@@ -85,21 +86,24 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
 {
     this->dir = dir;
     this->vlog = vlog;
-    this->sstable_index = 0;
+	this->sstable_index = 0;
     this->level = 0;
     this->tail = 0;
     this->head = 0;
+    this->write_vlog_index = 0;
+    this->vlog_filename = "../"+ vlog + ".vlog";
+    this->sst_folder_filename = "../"+dir+"/level0";
     bloom_filter.resize(8192);
     bloom_filter.assign(8192, false);
-    std::string sst_folder_name = "../"+dir+"/level0";
-    if (fs::create_directories(sst_folder_name))
+    
+    if (fs::create_directories(sst_folder_filename))
     {
         std::cout << "succsses creating the folder"<< std::endl;
     }else{
         //the directories already exist
         std::cerr << "failed to creat the folder"<< std::endl;
         int file_count = 0;
-        for (const auto& entry : fs::directory_iterator(sst_folder_name)) {
+        for (const auto& entry : fs::directory_iterator(sst_folder_filename)) {
             if (entry.is_regular_file()) {
                 ++file_count;
             }
@@ -107,22 +111,49 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
         this->sstable_index = file_count + 1;
     }
 
-    std::string filename = "../data/" + vlog + ".vlog";
+    
 
-    if (fs::exists(filename)) {
+    if (fs::exists(vlog_filename)) {
         // 文件存在，打开文件
         std::cout << "File exists, opening it..." << std::endl;
-        std::ofstream file(filename, std::ios::app); // 追加模式打开文件
-        unsigned long file_size = fs::file_size(filename);
+        std::ifstream file(vlog_filename, std::ios::app); // 追加模式打开文件
+        unsigned long file_size = fs::file_size(vlog_filename);
         this->head = file_size;
         if (!file.is_open()) {
             std::cerr << "Failed to open file" << std::endl;
             return;
         }
+        char single_byte = 0;
+        while (single_byte != 0xff)
+        {
+            file.read(reinterpret_cast<char*>(&single_byte), sizeof(single_byte));
+        }
+        uint16_t Checksum;
+        uint16_t crc;
+        do
+        {
+            file.read(reinterpret_cast<char*>(&Checksum), sizeof(Checksum));
+            uint64_t Key;
+            file.read(reinterpret_cast<char*>(&Key), sizeof(Key));
+            uint32_t vlen;
+            file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+            std::string result(vlen,'\0');
+            file.read(&result[0],vlen);
+            std::vector<unsigned char> binary_data;
+            binary_data.reserve(sizeof(unsigned long) + sizeof(unsigned int) + vlen);
+            binary_data.insert(binary_data.end(), reinterpret_cast<const unsigned char*>(&Key), reinterpret_cast<const unsigned char*>(&Key) + sizeof(unsigned long));
+            binary_data.insert(binary_data.end(), reinterpret_cast<const unsigned char*>(&vlen), reinterpret_cast<const unsigned char*>(&vlen) + sizeof(unsigned int));
+            binary_data.insert(binary_data.end(), result.begin(), result.end());
+            // calc the checksum
+            crc = utils::crc16(binary_data);
+            
+        } while (Checksum!=crc);
+        
+
     } else {
         // 文件不存在，创建文件
         std::cout << "File does not exist, creating it..." << std::endl;
-        std::ofstream file(filename);
+        std::ofstream file(vlog_filename);
         if (!file.is_open()) {
             std::cerr << "Failed to create file" << std::endl;
             return;
@@ -157,21 +188,21 @@ bool KVStore::testMemTableSize()
 void KVStore::saveToVlogSST()
 {
     //********write header to file
-    std::string filename = "../" + vlog + ".vlog";
-    std::string sst_filename = "../data/level0/" + std::to_string(sstable_index) + ".sst";
-    std::ofstream file(filename,std::ios::binary | std::ios::app);
-    std::ofstream sst_file(sst_filename,std::ios::binary);
 
+	std::string sst_filename = sst_folder_filename+"/" + std::to_string(sstable_index) + ".sst";
+    std::ofstream file(vlog_filename,std::ios::binary | std::ios::app);
+    std::ofstream sst_file(sst_filename,std::ios::binary);
+	
     if (!file.is_open()) {
         std::cerr << "无法打开文件" << std::endl;
         return;
     }
-    if (!sst_file.is_open())
-    {
+	if (!sst_file.is_open())
+	{
         std::cerr << "无法打开文件" << std::endl;
         return;
-    }
-
+	}
+	
     std::list<std::pair<unsigned long, std::string>> data_to_save = MemTable->traverse();
     unsigned long time_stamp = sstable_index;
     sstable_index ++;
@@ -198,12 +229,12 @@ void KVStore::saveToVlogSST()
     //*******write header to file
 
     //**write BloomFilter to file
-    /**
-    * Example
-    long long key = 103122;
-    unsigned int hash[4] = {0};
-    MurmurHash3_x64_128(&key, sizeof(key), 1, hash);
-    */
+        /**
+        * Example
+        long long key = 103122;
+        unsigned int hash[4] = {0};
+        MurmurHash3_x64_128(&key, sizeof(key), 1, hash);
+        */
     for (auto keyValuePair : data_to_save)
     {
         std::uint32_t hashValue[4];
@@ -243,8 +274,9 @@ void KVStore::saveToVlogSST()
             file.write(reinterpret_cast<const char*>(&vlen), sizeof(vlen));
             val_offset = static_cast<unsigned long>(file.tellp());
             file.write(value.data(), vlen);
+            head += 15 + vlen;
         }
-
+        
         //write data to sst file
         //if it is not deleted
         if (pair.second != "~DELETED~")
@@ -260,7 +292,7 @@ void KVStore::saveToVlogSST()
             unsigned int invalid_vlen = 0;
             sst_file.write(reinterpret_cast<const char*>(&invalid_vlen), sizeof(invalid_vlen));
         }
-
+        
 
     }
     //******write <Key,Offset,Vlen>to sst file
@@ -336,13 +368,13 @@ std::string KVStore::get(uint64_t key)
                         sst_file.read(reinterpret_cast<char*>(&byte), sizeof(byte));
                         file_bloom_filter.push_back(byte);
                     }
-
+                    
 
                     if (testBloomFilter(file_bloom_filter,key))
                     {
                         //if passed the bloom filter test
                         unsigned long first_key_index = 8224;
-                        unsigned long last_key_index = first_key_index + 20 * key_number;
+                        unsigned long last_key_index = first_key_index + 20 * (key_number-1);
                         unsigned long mid_key;
                         bool is_found = false;
                         while (first_key_index <= last_key_index) {
@@ -389,7 +421,7 @@ std::string KVStore::get(uint64_t key)
                                 }else{
                                     break;
                                 }
-                            }
+                            }        
 
                             if (mid_key == key)
                             {
@@ -416,7 +448,7 @@ std::string KVStore::get(uint64_t key)
                         continue;
                     }
 
-
+                    
                 }
             }
         }
@@ -429,28 +461,189 @@ std::string KVStore::get(uint64_t key)
             unsigned int vlen = 0;
             for (const auto &result : result_vector)
             {
-                if (result.time_stamp > time_stamp)
+                if (result.time_stamp >= time_stamp)
                 {
                     offset = result.offset;
                     vlen = result.vlen;
                     time_stamp = result.time_stamp;
                 }
-
+                
             }
             if (vlen == 0)
             {
                 return "";
             }
-            std::string filename = "../data/" + vlog + ".vlog";
-            std::ifstream file(filename,std::ios::binary);
+
+            std::ifstream file(vlog_filename,std::ios::binary);
             file.seekg(offset);
             std::string result(vlen,'\0');
             file.read(&result[0],vlen);
             return result;
         }
-
+        
     }
 
+}
+
+/*
+ *find the value valid newest offset corresponding to key
+ *return the offset ,if this key is currently in Memtable,return 0
+ *return 0,indicating that it does not need to insert again
+ */
+uint64_t KVStore::GetKeyOffset(uint64_t key){
+    std::string result = MemTable->get(key);
+    if (result != "error")
+    {
+        //found in the MemTable
+        return 0;
+    }else{
+        //search in the ssTable level by level
+        //need a vector to save data ,because timestamp
+        std::vector<KeyOffsetVlen> result_vector;
+        for (unsigned int i = 0; i <= level; i++)
+        {
+            std::string folder_path = "../data/level"+std::to_string(i);
+
+            // 遍历文件夹中的文件
+            for (const auto& entry : fs::directory_iterator(folder_path)) {
+                if (entry.is_regular_file()) {
+                    std::string filename = entry.path().string();
+                    std::ifstream sst_file(filename,std::ios::binary);
+                    unsigned long time_stamp ;
+                    unsigned long key_number ;
+                    unsigned long min_key ;
+                    unsigned long max_key ;
+                    sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
+                    sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
+                    sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
+                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
+                    //if key > max_key or key < min_key ,then go to next sst
+                    if (key > max_key || key < min_key)
+                    {
+                        continue;
+                    }
+                    //else make a binary search
+                    //get a bool vector
+                    char byte;
+                    std::vector<char> file_bloom_filter;
+                    for (int j = 0; j < 8192; j++)
+                    {
+                        sst_file.read(reinterpret_cast<char*>(&byte), sizeof(byte));
+                        file_bloom_filter.push_back(byte);
+                    }
+                    
+
+                    if (testBloomFilter(file_bloom_filter,key))
+                    {
+                        //if passed the bloom filter test
+                        unsigned long first_key_index = 8224;
+                        unsigned long last_key_index = first_key_index + 20 * (key_number-1);
+                        unsigned long mid_key;
+                        bool is_found = false;
+                        while (first_key_index <= last_key_index) {
+                            // 计算中间位置
+                            unsigned long mid_key_index = (first_key_index + last_key_index) / 2;
+                            //get first and last key
+                            sst_file.seekg(first_key_index);
+                            unsigned long first_key;
+                            sst_file.read(reinterpret_cast<char*>(&first_key), sizeof(first_key));
+                            sst_file.seekg(last_key_index);
+                            unsigned long last_key;
+                            sst_file.read(reinterpret_cast<char*>(&last_key), sizeof(last_key));
+                            //if (mid_key_index - first_key_index)%20 != 0 ,meaning it does not correspond to a key, complete it
+
+                            if ((mid_key_index - first_key_index)%20 != 0)
+                            {
+                                mid_key_index += (20-(mid_key_index - first_key_index)%20);
+                            }
+                            sst_file.seekg(mid_key_index);
+                            sst_file.read(reinterpret_cast<char*>(&mid_key), sizeof(mid_key));
+                            if (mid_key_index == last_key_index)
+                            {
+                                if (key == first_key || key == last_key)
+                                {
+                                    is_found = true;
+                                    KeyOffsetVlen result;
+                                    result.time_stamp = time_stamp;
+                                    if (key == first_key)
+                                    {
+                                        result.key = first_key;
+                                        sst_file.seekg(first_key_index+8);
+                                    }else {
+                                        result.key = last_key;
+                                        sst_file.seekg(last_key_index+8);
+                                    }
+                                    unsigned long offset;
+                                    sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+                                    unsigned int vlen;
+                                    sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                    result.offset = offset;
+                                    result.vlen = vlen;
+                                    result_vector.push_back(result);
+                                    break; ;
+                                }else{
+                                    break;
+                                }
+                            }        
+
+                            if (mid_key == key)
+                            {
+                                is_found = true;
+                                KeyOffsetVlen result;
+                                result.time_stamp = time_stamp;
+                                result.key = mid_key;
+                                unsigned long offset;
+                                sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+                                unsigned int vlen;
+                                sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                result.offset = offset;
+                                result.vlen = vlen;
+                                result_vector.push_back(result);
+                                break;
+                            }else if(mid_key < key){
+                                first_key_index = mid_key_index + 20;
+                            }else{
+                                last_key_index = mid_key_index -20;
+                            }
+                        }
+                    }else{
+                        //the key must not be in the sst
+                        continue;
+                    }
+
+                    
+                }
+            }
+        }
+        if (result_vector.size() == 0)
+        {
+            //did not find this value
+            return 0;
+        }else {
+            unsigned long time_stamp = 0;
+            unsigned long offset = 0;
+            unsigned int vlen = 0;
+            for (const auto &result : result_vector)
+            {
+                if (result.time_stamp >= time_stamp)
+                {
+                    offset = result.offset;
+                    vlen = result.vlen;
+                    time_stamp = result.time_stamp;
+                }
+                
+            }
+            if (vlen == 0)
+            {
+                //this key has been deleted
+                return 0;
+            }else{
+                //this key has valid offset
+                return offset;
+            }
+        }
+        
+    }
 }
 /**
  * Delete the given key-value pair if it exists.
@@ -479,19 +672,35 @@ void KVStore::reset()
     delete MemTable;
     MemTable = new skiplist::skiplist_type(0.37);
     std::string data_folder = "../data";
+    std::string level0_folder = data_folder + "/level0";
 
-    // 检查 data 文件夹是否存在
-    if (!fs::exists(data_folder)) {
-        std::cerr << "Data folder does not exist" << std::endl;
-        return;
+    // 检查 vlog 文件是否存在并删除
+    if (fs::exists(vlog_filename)) {
+        try {
+            fs::remove(vlog_filename);
+            std::cout << "Deleted vlog.vlog file successfully" << std::endl;
+            std::ofstream file(vlog_filename);
+            if (!file.is_open()) {
+                std::cerr << "Failed to create file" << std::endl;
+                return;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to delete vlog.vlog file: " << e.what() << std::endl;
+        }
     }
 
-    // 删除 data 文件夹及其内容
-    try {
-        fs::remove_all(data_folder);
-        std::cout << "Data folder reset successfully" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to reset data folder: " << e.what() << std::endl;
+    // 检查 level0 文件夹是否存在并删除其中的所有文件
+    if (fs::exists(level0_folder)) {
+        try {
+            for (const auto& entry : fs::directory_iterator(level0_folder)) {
+                if (entry.is_regular_file()) {
+                    fs::remove(entry.path());
+                }
+            }
+            std::cout << "Deleted all files in level0 folder successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to delete files in level0 folder: " << e.what() << std::endl;
+        }
     }
 }
 
@@ -513,16 +722,16 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
         // 遍历文件夹中的文件
         for (const auto& entry : fs::directory_iterator(folder_path)) {
             if (entry.is_regular_file()) {
-                std::string filename = entry.path().filename().string();
+                std::string filename = entry.path().string();
                 std::ifstream sst_file(filename,std::ios::binary);
                 unsigned long time_stamp ;
                 unsigned long key_number ;
-                unsigned long max_key ;
                 unsigned long min_key ;
+                unsigned long max_key ;
                 sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
                 sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                 sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
+                sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
                 //if search range is beyond this sst,then go to next one
                 if (key1 > max_key || key2 < min_key)
                 {
@@ -553,7 +762,7 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                 {
                     continue;
                 }
-
+                
                 //conitinue to find the key2_index
                 while (search_index <= last_key_index)
                 {
@@ -589,18 +798,19 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                     sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
                     unsigned int vlen;
                     sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                    result.key = key;
                     result.offset = offset;
                     result.vlen = vlen;
                     myPushBack(result_vector,result);
                     search_index += 20;
                 }
-
-
+                
+                
             }
         }
     }
-    std::string filename = "../data/" + vlog + ".vlog";
-    std::ifstream file(filename,std::ios::binary);
+
+    std::ifstream file(vlog_filename,std::ios::binary);
 
     PushBackList(result_vector,list,file);
 
@@ -612,4 +822,35 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
  */
 void KVStore::gc(uint64_t chunk_size)
 {
+    uint64_t origin_tail = tail;
+    std::ifstream file(vlog_filename,std::ios::binary);
+    file.seekg(tail);
+    uint64_t collected_space=0;
+    while (collected_space < chunk_size)
+    {
+        char Magic;
+        file.read(reinterpret_cast<char*>(&Magic), sizeof(Magic));
+        uint16_t Checksum;
+        file.read(reinterpret_cast<char*>(&Checksum), sizeof(Checksum));
+        uint64_t Key;
+        file.read(reinterpret_cast<char*>(&Key), sizeof(Key));
+        uint32_t vlen;
+        file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+        uint64_t val_offset = static_cast<unsigned long>(file.tellg());
+        //buggy function GetKeyOffset
+        uint64_t latest_offset = this->GetKeyOffset(Key);
+        std::string result(vlen,'\0');
+        file.read(&result[0],vlen);
+        if (latest_offset == val_offset) 
+        {
+            //this value is latest
+            this->put(Key,result);
+        }
+
+        collected_space += 15+vlen;
+        
+    }
+    saveToVlogSST();
+    tail += collected_space;
+    utils::de_alloc_file(vlog_filename,origin_tail,collected_space);
 }

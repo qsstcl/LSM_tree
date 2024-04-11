@@ -62,9 +62,9 @@ protected:
 	void check_gc(uint64_t size)
 	{
 		uint64_t last_offset, cur_offset;
-		last_offset = utils::seek_data_block(vlog.c_str());
+		last_offset = utils::seek_data_block("../data/vlog.vlog");
 		store.gc(size);
-		cur_offset = utils::seek_data_block(vlog.c_str());
+		cur_offset = utils::seek_data_block("../data/vlog.vlog");
 		GC_EXPECT(cur_offset, last_offset, size);
 	}
 

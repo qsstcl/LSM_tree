@@ -11,4 +11,5 @@ add_executable(test
         kvstore_api.h
         main.cc
         skiplist.cc
-        skiplist.h)
+        skiplist.h
+)
