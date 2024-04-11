@@ -38,14 +38,14 @@ void myPushBack(std::vector<KeyOffsetVlen> &result_vector,KeyOffsetVlen &result)
             if (single_result.key == result.key && result.time_stamp > single_result.time_stamp)
             {
                 single_result = result;
-                return ; // 找到匹配的键后立即结束循环
+                break; // 找到匹配的键后立即结束循环
             }else if (single_result.key == result.key)
             {
-                return ;
+                break;
             }else
             {
                 result_vector.push_back(result);
-                return;
+                break;
             }
 
         }
@@ -189,7 +189,11 @@ void KVStore::saveToVlogSST()
 {
     //********write header to file
 
-	std::string sst_filename = sst_folder_filename +"/" + std::to_string(sstable_index) + ".sst";
+	std::string sst_filename = sst_folder_filename+"/" + std::to_string(sstable_index) + ".sst";
+    if (sstable_index == 107)
+    {
+        std::cout << "this is 107\n";
+    }
     std::ofstream file(vlog_filename,std::ios::binary | std::ios::app);
     std::ofstream sst_file(sst_filename,std::ios::binary);
 	
@@ -323,11 +327,6 @@ void KVStore::put(uint64_t key, const std::string &s)
  */
 std::string KVStore::get(uint64_t key)
 {
-    if (MemTable->get_length() == 0)
-    {
-        return "";
-    }
-    
     std::string result = MemTable->get(key);
     if (result != "error")
     {
@@ -351,10 +350,6 @@ std::string KVStore::get(uint64_t key)
                 if (entry.is_regular_file()) {
                     std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
-                    if (!sst_file.is_open()) {
-                        std::cerr << "Failed to open file: " << vlog_filename << std::endl;
-                        return ; // 退出程序
-                    }
                     unsigned long time_stamp ;
                     unsigned long key_number ;
                     unsigned long min_key ;
@@ -484,10 +479,6 @@ std::string KVStore::get(uint64_t key)
             }
 
             std::ifstream file(vlog_filename,std::ios::binary);
-            if (!file.is_open()) {
-                std::cerr << "Failed to open file: " << vlog_filename << std::endl;
-                return ; // 退出程序
-            }
             file.seekg(offset);
             std::string result(vlen,'\0');
             file.read(&result[0],vlen);
@@ -522,10 +513,6 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                 if (entry.is_regular_file()) {
                     std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
-                    if (!sst_file.is_open()) {
-                        std::cerr << "Failed to open file: " << filename << std::endl;
-                        return ; // 退出程序
-                    }
                     unsigned long time_stamp ;
                     unsigned long key_number ;
                     unsigned long min_key ;
@@ -672,9 +659,19 @@ bool KVStore::del(uint64_t key)
     std::string search_result = get(key);
     if (search_result != "")
     {
+
         //found it in memTable
-        MemTable->put(key,"~DELETED~");
+        if (!testMemTableSize())
+        {
+            MemTable->put(key,"~DELETED~");
+        }else {
+            saveToVlogSST();
+            delete MemTable;
+            MemTable = new skiplist::skiplist_type(0.37);
+            MemTable->put(key,"~DELETED~");
+        }
         return true;
+
     }else{
         return false;
     }
@@ -741,11 +738,6 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().string();
                 std::ifstream sst_file(filename,std::ios::binary);
-                if (!sst_file.is_open()) {
-                    std::cerr << "Failed to open file: " << filename << std::endl;
-                    return ; // 退出程序
-                }
-                
                 unsigned long time_stamp ;
                 unsigned long key_number ;
                 unsigned long min_key ;
@@ -833,10 +825,7 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
     }
 
     std::ifstream file(vlog_filename,std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << vlog_filename << std::endl;
-        return ; // 退出程序
-    }
+
     PushBackList(result_vector,list,file);
 
 }
@@ -862,6 +851,7 @@ void KVStore::gc(uint64_t chunk_size)
         uint32_t vlen;
         file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
         uint64_t val_offset = static_cast<unsigned long>(file.tellg());
+        //buggy function GetKeyOffset
         uint64_t latest_offset = this->GetKeyOffset(Key);
         std::string result(vlen,'\0');
         file.read(&result[0],vlen);

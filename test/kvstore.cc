@@ -190,6 +190,10 @@ void KVStore::saveToVlogSST()
     //********write header to file
 
 	std::string sst_filename = sst_folder_filename+"/" + std::to_string(sstable_index) + ".sst";
+    if (sstable_index == 107)
+    {
+        std::cout << "this is 107\n";
+    }
     std::ofstream file(vlog_filename,std::ios::binary | std::ios::app);
     std::ofstream sst_file(sst_filename,std::ios::binary);
 	
@@ -655,9 +659,19 @@ bool KVStore::del(uint64_t key)
     std::string search_result = get(key);
     if (search_result != "")
     {
+
         //found it in memTable
-        MemTable->put(key,"~DELETED~");
+        if (!testMemTableSize())
+        {
+            MemTable->put(key,"~DELETED~");
+        }else {
+            saveToVlogSST();
+            delete MemTable;
+            MemTable = new skiplist::skiplist_type(0.37);
+            MemTable->put(key,"~DELETED~");
+        }
         return true;
+
     }else{
         return false;
     }
