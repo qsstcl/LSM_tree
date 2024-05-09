@@ -176,7 +176,7 @@ KVStore::~KVStore()
 // else return false
 bool KVStore::testMemTableSize()
 {
-    if (MemTable->get_length() <= 407)
+    if (MemTable->get_length() <= 400)
     {
         return false;
     }else{
@@ -190,10 +190,6 @@ void KVStore::saveToVlogSST()
     //********write header to file
 
 	std::string sst_filename = sst_folder_filename+"/" + std::to_string(sstable_index) + ".sst";
-    if (sstable_index == 107)
-    {
-        std::cout << "this is 107\n";
-    }
     std::ofstream file(vlog_filename,std::ios::binary | std::ios::app);
     std::ofstream sst_file(sst_filename,std::ios::binary);
 	

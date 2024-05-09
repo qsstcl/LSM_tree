@@ -127,23 +127,23 @@ private:
 
         phase();
 
-//        for (i = 0; i < max; ++i)
-//        {
-//            switch (i % 3)
-//            {
-//                case 0:
-//                    EXPECT(std::string(i + 1, 'e'), store.get(i));
-//                    break;
-//                case 1:
-//                    EXPECT(std::string(i + 1, '2'), store.get(i));
-//                    break;
-//                case 2:
-//                    EXPECT(std::string(i + 1, '3'), store.get(i));
-//                    break;
-//                default:
-//                    assert(0);
-//            }
-//        }
+        for (i = 0; i < max; ++i)
+        {
+            switch (i % 3)
+            {
+                case 0:
+                    EXPECT(std::string(i + 1, 'e'), store.get(i));
+                    break;
+                case 1:
+                    EXPECT(std::string(i + 1, '2'), store.get(i));
+                    break;
+                case 2:
+                    EXPECT(std::string(i + 1, '3'), store.get(i));
+                    break;
+                default:
+                    assert(0);
+            }
+        }
 
         phase();
 
@@ -202,17 +202,17 @@ public:
 
     void start_test(void *args = NULL) override
     {
-//        std::cout << "KVStore Correctness Test" << std::endl;
-//
-//        store.reset();
-//
-//        std::cout << "[Simple Test]" << std::endl;
-//        regular_test(SIMPLE_TEST_MAX);
-//
-//        store.reset();
-//
-//        std::cout << "[Large Test]" << std::endl;
-//        regular_test(LARGE_TEST_MAX);
+        std::cout << "KVStore Correctness Test" << std::endl;
+
+        store.reset();
+
+        std::cout << "[Simple Test]" << std::endl;
+        regular_test(SIMPLE_TEST_MAX);
+
+        store.reset();
+
+        std::cout << "[Large Test]" << std::endl;
+        regular_test(LARGE_TEST_MAX);
 
         store.reset();
 
