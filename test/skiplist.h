@@ -48,6 +48,7 @@ namespace skiplist {
         double posibility;
         Node *head,*tail;
     public:
+        ~skiplist_type();
         int random_level();
         explicit skiplist_type(double p = 0.5);
         void put(key_type key, const value_type &val);

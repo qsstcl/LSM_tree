@@ -18,7 +18,7 @@ struct KeyOffsetVlen {
     unsigned int vlen;
 };
 //test if key exist in this bloom filter
-bool testBloomFilter(std::vector<char> &file_bloom_filter,uint64_t key){
+bool testBloomFilter(char * file_bloom_filter,uint64_t key){
     std::uint32_t hashValue[4];
     MurmurHash3_x64_128(&key, sizeof(key), 1, hashValue);
     for (int j = 0; j < 4; ++j) {
@@ -124,7 +124,9 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
             return;
         }
         char single_byte = 0;
-        while (single_byte != 0xff)
+        unsigned long offset = utils::seek_data_block(vlog_filename);
+        file.seekg(offset);
+        while (single_byte != -1)
         {
             file.read(reinterpret_cast<char*>(&single_byte), sizeof(single_byte));
         }
@@ -346,29 +348,33 @@ std::string KVStore::get(uint64_t key)
                 if (entry.is_regular_file()) {
                     std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
-                    unsigned long time_stamp ;
-                    unsigned long key_number ;
-                    unsigned long min_key ;
-                    unsigned long max_key ;
-                    sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
-                    sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                    sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
-                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
+                    // 获取文件大小
+                    sst_file.seekg(0, std::ios::end);
+                    std::streampos file_size = sst_file.tellg();
+                    sst_file.seekg(0, std::ios::beg);
+
+                    // 读取文件内容到内存缓冲区
+                    char* buffer= new char[file_size];
+                    if (!sst_file.read(buffer, file_size)) {
+                        std::cerr << "Error reading file\n";
+                        return "wrong";
+                    }
+                    unsigned long read_index = 0;
+                    unsigned long time_stamp = ((unsigned long*)buffer)[0];
+                    unsigned long key_number = ((unsigned long*)buffer)[1];
+                    unsigned long min_key = ((unsigned long*)buffer)[2];
+                    unsigned long max_key = ((unsigned long*)buffer)[3];
                     //if key > max_key or key < min_key ,then go to next sst
                     if (key > max_key || key < min_key)
                     {
+                        delete[] buffer;
                         continue;
                     }
                     //else make a binary search
                     //get a bool vector
                     char byte;
-                    std::vector<char> file_bloom_filter;
-                    for (int j = 0; j < 8192; j++)
-                    {
-                        sst_file.read(reinterpret_cast<char*>(&byte), sizeof(byte));
-                        file_bloom_filter.push_back(byte);
-                    }
-                    
+                    char * file_bloom_filter = new char[8192];
+                    memcpy(file_bloom_filter, buffer + 32, 8192);
 
                     if (testBloomFilter(file_bloom_filter,key))
                     {
@@ -381,20 +387,15 @@ std::string KVStore::get(uint64_t key)
                             // 计算中间位置
                             unsigned long mid_key_index = (first_key_index + last_key_index) / 2;
                             //get first and last key
-                            sst_file.seekg(first_key_index);
-                            unsigned long first_key;
-                            sst_file.read(reinterpret_cast<char*>(&first_key), sizeof(first_key));
-                            sst_file.seekg(last_key_index);
-                            unsigned long last_key;
-                            sst_file.read(reinterpret_cast<char*>(&last_key), sizeof(last_key));
+                            unsigned long first_key = *((unsigned long*)(buffer + first_key_index));
+                            unsigned long last_key = *((unsigned long*)(buffer + last_key_index));
                             //if (mid_key_index - first_key_index)%20 != 0 ,meaning it does not correspond to a key, complete it
-
                             if ((mid_key_index - first_key_index)%20 != 0)
                             {
                                 mid_key_index += (20-(mid_key_index - first_key_index)%20);
                             }
-                            sst_file.seekg(mid_key_index);
-                            sst_file.read(reinterpret_cast<char*>(&mid_key), sizeof(mid_key));
+                            mid_key = *((unsigned long*)(buffer + mid_key_index));
+                            read_index = mid_key_index+8;
                             if (mid_key_index == last_key_index)
                             {
                                 if (key == first_key || key == last_key)
@@ -405,15 +406,14 @@ std::string KVStore::get(uint64_t key)
                                     if (key == first_key)
                                     {
                                         result.key = first_key;
-                                        sst_file.seekg(first_key_index+8);
+                                        read_index = first_key_index +8;
                                     }else {
                                         result.key = last_key;
-                                        sst_file.seekg(last_key_index+8);
+                                        read_index = last_key_index + 8;
                                     }
-                                    unsigned long offset;
-                                    sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                                    unsigned int vlen;
-                                    sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                    unsigned long offset = *((unsigned long*)(buffer+read_index));
+                                    read_index+=8;
+                                    unsigned int vlen = *((unsigned int*)(buffer+read_index));
                                     result.offset = offset;
                                     result.vlen = vlen;
                                     result_vector.push_back(result);
@@ -421,18 +421,16 @@ std::string KVStore::get(uint64_t key)
                                 }else{
                                     break;
                                 }
-                            }        
-
+                            }
                             if (mid_key == key)
                             {
                                 is_found = true;
                                 KeyOffsetVlen result;
                                 result.time_stamp = time_stamp;
                                 result.key = mid_key;
-                                unsigned long offset;
-                                sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                                unsigned int vlen;
-                                sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                unsigned long offset = *((unsigned long*)(buffer+read_index));
+                                read_index += 8;
+                                unsigned int vlen = *((unsigned int*)(buffer+read_index));
                                 result.offset = offset;
                                 result.vlen = vlen;
                                 result_vector.push_back(result);
@@ -443,12 +441,17 @@ std::string KVStore::get(uint64_t key)
                                 last_key_index = mid_key_index -20;
                             }
                         }
+                        //clear memory
+                        delete[] buffer;
+                        delete[] file_bloom_filter;
                     }else{
                         //the key must not be in the sst
+                        delete[] buffer;
+                        delete[] file_bloom_filter;
                         continue;
                     }
 
-                    
+
                 }
             }
         }
@@ -467,13 +470,11 @@ std::string KVStore::get(uint64_t key)
                     vlen = result.vlen;
                     time_stamp = result.time_stamp;
                 }
-                
             }
             if (vlen == 0)
             {
                 return "";
             }
-
             std::ifstream file(vlog_filename,std::ios::binary);
             file.seekg(offset);
             std::string result(vlen,'\0');
@@ -494,7 +495,6 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
     std::string result = MemTable->get(key);
     if (result != "error")
     {
-        //found in the MemTable
         return 0;
     }else{
         //search in the ssTable level by level
@@ -509,29 +509,33 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                 if (entry.is_regular_file()) {
                     std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
-                    unsigned long time_stamp ;
-                    unsigned long key_number ;
-                    unsigned long min_key ;
-                    unsigned long max_key ;
-                    sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
-                    sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                    sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
-                    sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
+                    // 获取文件大小
+                    sst_file.seekg(0, std::ios::end);
+                    std::streampos file_size = sst_file.tellg();
+                    sst_file.seekg(0, std::ios::beg);
+
+                    // 读取文件内容到内存缓冲区
+                    char* buffer= new char[file_size];
+                    if (!sst_file.read(buffer, file_size)) {
+                        std::cerr << "Error reading file\n";
+                        return 0;
+                    }
+                    unsigned long read_index = 0;
+                    unsigned long time_stamp = ((unsigned long*)buffer)[0];
+                    unsigned long key_number = ((unsigned long*)buffer)[1];
+                    unsigned long min_key = ((unsigned long*)buffer)[2];
+                    unsigned long max_key = ((unsigned long*)buffer)[3];
                     //if key > max_key or key < min_key ,then go to next sst
                     if (key > max_key || key < min_key)
                     {
+                        delete[] buffer;
                         continue;
                     }
                     //else make a binary search
                     //get a bool vector
                     char byte;
-                    std::vector<char> file_bloom_filter;
-                    for (int j = 0; j < 8192; j++)
-                    {
-                        sst_file.read(reinterpret_cast<char*>(&byte), sizeof(byte));
-                        file_bloom_filter.push_back(byte);
-                    }
-                    
+                    char * file_bloom_filter = new char[8192];
+                    memcpy(file_bloom_filter, buffer + 32, 8192);
 
                     if (testBloomFilter(file_bloom_filter,key))
                     {
@@ -544,20 +548,15 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                             // 计算中间位置
                             unsigned long mid_key_index = (first_key_index + last_key_index) / 2;
                             //get first and last key
-                            sst_file.seekg(first_key_index);
-                            unsigned long first_key;
-                            sst_file.read(reinterpret_cast<char*>(&first_key), sizeof(first_key));
-                            sst_file.seekg(last_key_index);
-                            unsigned long last_key;
-                            sst_file.read(reinterpret_cast<char*>(&last_key), sizeof(last_key));
+                            unsigned long first_key = *((unsigned long*)(buffer + first_key_index));
+                            unsigned long last_key = *((unsigned long*)(buffer + last_key_index));
                             //if (mid_key_index - first_key_index)%20 != 0 ,meaning it does not correspond to a key, complete it
-
                             if ((mid_key_index - first_key_index)%20 != 0)
                             {
                                 mid_key_index += (20-(mid_key_index - first_key_index)%20);
                             }
-                            sst_file.seekg(mid_key_index);
-                            sst_file.read(reinterpret_cast<char*>(&mid_key), sizeof(mid_key));
+                            mid_key = *((unsigned long*)(buffer + mid_key_index));
+                            read_index = mid_key_index+8;
                             if (mid_key_index == last_key_index)
                             {
                                 if (key == first_key || key == last_key)
@@ -568,15 +567,14 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                                     if (key == first_key)
                                     {
                                         result.key = first_key;
-                                        sst_file.seekg(first_key_index+8);
+                                        read_index = first_key_index +8;
                                     }else {
                                         result.key = last_key;
-                                        sst_file.seekg(last_key_index+8);
+                                        read_index = last_key_index + 8;
                                     }
-                                    unsigned long offset;
-                                    sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                                    unsigned int vlen;
-                                    sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                    unsigned long offset = *((unsigned long*)(buffer+read_index));
+                                    read_index+=8;
+                                    unsigned int vlen = *((unsigned int*)(buffer+read_index));
                                     result.offset = offset;
                                     result.vlen = vlen;
                                     result_vector.push_back(result);
@@ -584,18 +582,16 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                                 }else{
                                     break;
                                 }
-                            }        
-
+                            }
                             if (mid_key == key)
                             {
                                 is_found = true;
                                 KeyOffsetVlen result;
                                 result.time_stamp = time_stamp;
                                 result.key = mid_key;
-                                unsigned long offset;
-                                sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                                unsigned int vlen;
-                                sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                                unsigned long offset = *((unsigned long*)(buffer+read_index));
+                                read_index += 8;
+                                unsigned int vlen = *((unsigned int*)(buffer+read_index));
                                 result.offset = offset;
                                 result.vlen = vlen;
                                 result_vector.push_back(result);
@@ -606,18 +602,22 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                                 last_key_index = mid_key_index -20;
                             }
                         }
+                        //clear memory
+                        delete[] buffer;
+                        delete[] file_bloom_filter;
                     }else{
                         //the key must not be in the sst
+                        delete[] buffer;
+                        delete[] file_bloom_filter;
                         continue;
                     }
 
-                    
+
                 }
             }
         }
         if (result_vector.size() == 0)
         {
-            //did not find this value
             return 0;
         }else {
             unsigned long time_stamp = 0;
@@ -631,19 +631,17 @@ uint64_t KVStore::GetKeyOffset(uint64_t key){
                     vlen = result.vlen;
                     time_stamp = result.time_stamp;
                 }
-                
             }
             if (vlen == 0)
             {
-                //this key has been deleted
                 return 0;
             }else{
-                //this key has valid offset
                 return offset;
             }
         }
-        
+
     }
+
 }
 /**
  * Delete the given key-value pair if it exists.
@@ -683,7 +681,10 @@ void KVStore::reset()
     MemTable = new skiplist::skiplist_type(0.37);
     std::string data_folder = "../data";
     std::string level0_folder = data_folder + "/level0";
-
+    this->sstable_index = 0;
+    this->tail=0;
+    this->head=0;
+    this->write_vlog_index = 0;
     // 检查 vlog 文件是否存在并删除
     if (fs::exists(vlog_filename)) {
         try {
@@ -734,17 +735,19 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().string();
                 std::ifstream sst_file(filename,std::ios::binary);
-                unsigned long time_stamp ;
-                unsigned long key_number ;
-                unsigned long min_key ;
-                unsigned long max_key ;
-                sst_file.read(reinterpret_cast<char*>(&time_stamp), sizeof(time_stamp));
-                sst_file.read(reinterpret_cast<char*>(&key_number), sizeof(key_number));
-                sst_file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
-                sst_file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
+                sst_file.seekg(0,std::ios::end);
+                std::streampos file_size = sst_file.tellg();
+                sst_file.seekg(0,std::ios::beg);
+                char* buffer = new char[file_size];
+                unsigned long read_index = 0;
+                unsigned long time_stamp = ((unsigned long*)buffer)[0] ;
+                unsigned long key_number = ((unsigned long*)buffer)[1] ;
+                unsigned long min_key = ((unsigned long*)buffer)[2] ;
+                unsigned long max_key = ((unsigned long*)buffer)[3]  ;
                 //if search range is beyond this sst,then go to next one
                 if (key1 > max_key || key2 < min_key)
                 {
+                    delete[] buffer;
                     continue;
                 }
                 //search range is under this sst
@@ -757,8 +760,7 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                 //find the key1_index
                 while (search_index <= last_key_index)
                 {
-                    sst_file.seekg(search_index);
-                    sst_file.read(reinterpret_cast<char*>(&search_key), sizeof(search_key));
+                    search_key = * ((unsigned long*)(buffer + search_index));
                     if (search_key < key1)
                     {
                         search_index += 20;
@@ -770,14 +772,14 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                 //all the keys in sst are smaller than key1
                 if (key1_index == 0)
                 {
+                    delete[] buffer;
                     continue;
                 }
                 
                 //conitinue to find the key2_index
                 while (search_index <= last_key_index)
                 {
-                    sst_file.seekg(search_index);
-                    sst_file.read(reinterpret_cast<char*>(&search_key), sizeof(search_key));
+                    search_key = * ((unsigned long*)(buffer + search_index));
                     if (search_key <= key2)
                     {
                         search_index += 20;
@@ -794,27 +796,26 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
                 //key2 is smaller than the smallest key in this sst
                 if (key2_index == first_key_index - 20)
                 {
+                    delete[] buffer;
                     continue;
                 }
-                sst_file.seekg(key1_index);
                 search_index = key1_index;
                 while (search_index <= key2_index)
                 {
                     KeyOffsetVlen result;
                     result.time_stamp = time_stamp;
-                    unsigned long key;
-                    sst_file.read(reinterpret_cast<char*>(&key), sizeof(key));
-                    unsigned long offset;
-                    sst_file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-                    unsigned int vlen;
-                    sst_file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
+                    unsigned long key = *((unsigned long*)(buffer + search_index));
+                    search_index += 8;
+                    unsigned long offset = *((unsigned long*)(buffer + search_index));
+                    search_index += 8;
+                    unsigned int vlen = *((unsigned int*)(buffer + search_index));
+                    search_index += 4;
                     result.key = key;
                     result.offset = offset;
                     result.vlen = vlen;
                     myPushBack(result_vector,result);
-                    search_index += 20;
                 }
-                
+                delete[] buffer;
                 
             }
         }
@@ -847,7 +848,6 @@ void KVStore::gc(uint64_t chunk_size)
         uint32_t vlen;
         file.read(reinterpret_cast<char*>(&vlen), sizeof(vlen));
         uint64_t val_offset = static_cast<unsigned long>(file.tellg());
-        //buggy function GetKeyOffset
         uint64_t latest_offset = this->GetKeyOffset(Key);
         std::string result(vlen,'\0');
         file.read(&result[0],vlen);

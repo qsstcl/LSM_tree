@@ -20,6 +20,10 @@ namespace skiplist {
         head = new Node(0,"",1,tail);
 
     }
+    skiplist_type::~skiplist_type(){
+        delete tail;
+        delete head;
+    }
     void skiplist_type::put(key_type key, const value_type &val) {
         if (get(key)!="error"){
             //found it int the skiplist

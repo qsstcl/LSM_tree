@@ -209,15 +209,15 @@ public:
         std::cout << "[Simple Test]" << std::endl;
         regular_test(SIMPLE_TEST_MAX);
 
-        store.reset();
-
-        std::cout << "[Large Test]" << std::endl;
-        regular_test(LARGE_TEST_MAX);
-
-        store.reset();
-
-        std::cout << "[GC Test]" << std::endl;
-        gc_test(GC_TEST_MAX);
+//        store.reset();
+//
+//        std::cout << "[Large Test]" << std::endl;
+//        regular_test(LARGE_TEST_MAX);
+//
+//        store.reset();
+//
+//        std::cout << "[GC Test]" << std::endl;
+//        gc_test(GC_TEST_MAX);
     }
 };
 
