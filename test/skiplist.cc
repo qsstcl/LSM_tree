@@ -21,11 +21,15 @@ namespace skiplist {
 
     }
     skiplist_type::~skiplist_type(){
-        delete tail;
-        delete head;
+        Node* current = head;
+        while (current != nullptr) {
+            Node* next_node = current->forward[0];
+            delete current;
+            current = next_node;
+        }
     }
     void skiplist_type::put(key_type key, const value_type &val) {
-        if (get(key)!="error"){
+        if (get(key)!="error!"){
             //found it int the skiplist
             Node *p = head;
             for (int i = level-1; i >= 0; i--) {
@@ -92,7 +96,7 @@ namespace skiplist {
         }
         p = p->forward[0];
         if (p->key == key) return p->value;
-        else return "error";
+        else return "error!";
     }
     int skiplist_type::query_distance(key_type key) const {
         int count=0;

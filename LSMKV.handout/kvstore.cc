@@ -350,6 +350,7 @@ std::string KVStore::get(uint64_t key)
                 if (entry.is_regular_file()) {
                     std::string filename = entry.path().string();
                     std::ifstream sst_file(filename,std::ios::binary);
+                    void* mmap_ptr = sst_file.rdbuf();
                     unsigned long time_stamp ;
                     unsigned long key_number ;
                     unsigned long min_key ;
