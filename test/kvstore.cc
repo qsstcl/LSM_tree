@@ -316,6 +316,7 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
     unsigned sst_num = 0;
     if (utils::dirExists(sst_folder_filename)){
         //the directories already exist
+        bool isFound = false;
         for (const auto& entry : fs::directory_iterator(sst_folder_filename)) {
             if (entry.is_directory())
             {
@@ -330,11 +331,38 @@ KVStore::KVStore(const std::string &dir, const std::string &vlog) : KVStoreAPI(d
                             num = file_name.substr(0,index);
                             if (std::stoi(num)>sst_num){
                                 sst_num = std::stoi(num);
+                                isFound = true;
                             }
                         }
                     }
                 }
                 this->level++;
+            }
+        }
+
+        if (!isFound){
+            for (const auto& entry : fs::directory_iterator(sst_folder_filename)) {
+                if (entry.is_directory())
+                {
+                    if (entry.path().filename() =="level1")
+                    {
+                        for (const auto& sst : fs::directory_iterator(entry)) {
+                            if (sst.is_regular_file())
+                            {
+                                std::string file_name = sst.path().filename();
+                                std::string num;
+                                unsigned index2 = file_name.find('.');
+                                unsigned index1 = file_name.find(']')+1;
+                                num = file_name.substr(index1,index2-index1);
+                                if (std::stoi(num)>sst_num){
+                                    sst_num = std::stoi(num);
+                                    isFound = true;
+                                }
+                            }
+                        }
+                    }
+                    this->level++;
+                }
             }
         }
         this->sstable_index = sst_num + 1;

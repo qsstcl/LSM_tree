@@ -1,31 +1,33 @@
 #include <iostream>
 #include <cstdint>
 #include <string>
-#include <cassert>
-#include <semaphore.h>
-#include <random>
-#include <signal.h>
+#include <assert.h>
 
 #include "test.h"
 
-class PersistenceTest : public Test
+class CorrectnessTest : public Test
 {
 private:
-    const uint64_t TEST_MAX = 1024 * 32;
-    const uint64_t GC_TRIGGER = 1024;
+    const uint64_t SIMPLE_TEST_MAX = 512;
+    const uint64_t LARGE_TEST_MAX = 1024 * 64;
+    const uint64_t GC_TEST_MAX = 1024 * 48;
 
-public:
-    void prepare()
+    void regular_test(uint64_t max)
     {
-        std::cout << "KVStore Persistence Test" << std::endl;
-        std::cout << "<<Preparation Mode>>" << std::endl;
         uint64_t i;
 
-        // Clean up
-        store.reset();
+        // Test a single key
+        EXPECT(not_found, store.get(1));
+        store.put(1, "SE");
+        EXPECT("SE", store.get(1));
+        EXPECT(true, store.del(1));
+        EXPECT(not_found, store.get(1));
+        EXPECT(false, store.del(1));
+
+        phase();
 
         // Test multiple key-value pairs
-        for (i = 0; i < TEST_MAX; ++i)
+        for (i = 0; i < max; ++i)
         {
             store.put(i, std::string(i + 1, 's'));
             EXPECT(std::string(i + 1, 's'), store.get(i));
@@ -33,119 +35,155 @@ public:
         phase();
 
         // Test after all insertions
-        for (i = 0; i < TEST_MAX; ++i)
+        for (i = 0; i < max; ++i)
             EXPECT(std::string(i + 1, 's'), store.get(i));
         phase();
 
-        // Test deletions
-        for (i = 0; i < TEST_MAX; i += 2)
-        {
-            EXPECT(true, store.del(i));
+        // Test scan
+        std::list<std::pair<uint64_t, std::string>> list_ans;
+        std::list<std::pair<uint64_t, std::string>> list_stu;
 
-            if ((i / 2) % GC_TRIGGER == 0) [[unlikely]]
+        for (i = 0; i < max / 2; ++i)
+        {
+            list_ans.emplace_back(std::make_pair(i, std::string(i + 1, 's')));
+        }
+
+        store.scan(0, max / 2 - 1, list_stu);
+        EXPECT(list_ans.size(), list_stu.size());
+
+        auto ap = list_ans.begin();
+        auto sp = list_stu.begin();
+        while (ap != list_ans.end())
+        {
+            if (sp == list_stu.end())
             {
-                check_gc(16 * MB);
+                EXPECT((*ap).first, -1);
+                EXPECT((*ap).second, not_found);
+                ap++;
+            }
+            else
+            {
+                EXPECT((*ap).first, (*sp).first);
+                EXPECT((*ap).second, (*sp).second);
+                ap++;
+                sp++;
             }
         }
 
-        // Prepare data for Test Mode
-        for (i = 0; i < TEST_MAX; ++i)
+        phase();
+
+        // Test deletions
+        for (i = 0; i < max; i += 2)
         {
-            switch (i & 3)
+            EXPECT(true, store.del(i));
+        }
+
+        for (i = 0; i < max; ++i)
+            EXPECT((i & 1) ? std::string(i + 1, 's') : not_found,
+                   store.get(i));
+
+        for (i = 1; i < max; ++i)
+            EXPECT(i & 1, store.del(i));
+
+        phase();
+
+        report();
+    }
+
+    void gc_test(uint64_t max)
+    {
+        uint64_t i;
+        uint64_t gc_trigger = 1024;
+
+        for (i = 0; i < max; ++i)
+        {
+            store.put(i, std::string(i + 1, 's'));
+        }
+
+        for (i = 0; i < max; ++i)
+        {
+            EXPECT(std::string(i + 1, 's'), store.get(i));
+            switch (i % 3)
             {
                 case 0:
-                    EXPECT(not_found, store.get(i));
-                    store.put(i, std::string(i + 1, 't'));
+                    store.put(i, std::string(i + 1, 'e'));
                     break;
                 case 1:
-                    EXPECT(std::string(i + 1, 's'), store.get(i));
-                    store.put(i, std::string(i + 1, 't'));
+                    store.put(i, std::string(i + 1, '2'));
                     break;
                 case 2:
-                    EXPECT(not_found, store.get(i));
-                    break;
-                case 3:
-                    EXPECT(std::string(i + 1, 's'), store.get(i));
+                    store.put(i, std::string(i + 1, '3'));
                     break;
                 default:
                     assert(0);
             }
 
-            if (i % GC_TRIGGER == 0) [[unlikely]]
+            if (i % gc_trigger == 0) [[unlikely]]
+            {
+                check_gc(16 * MB);
+            }
+        }
+
+        phase();
+
+        for (i = 0; i < max; ++i)
+        {
+            switch (i % 3)
+            {
+                case 0:
+                    EXPECT(std::string(i + 1, 'e'), store.get(i));
+                    break;
+                case 1:
+                    EXPECT(std::string(i + 1, '2'), store.get(i));
+                    break;
+                case 2:
+                    EXPECT(std::string(i + 1, '3'), store.get(i));
+                    break;
+                default:
+                    assert(0);
+            }
+        }
+
+        phase();
+
+        for (i = 1; i < max; i += 2)
+        {
+            EXPECT(true, store.del(i));
+
+            if ((i - 1) % gc_trigger == 0) [[unlikely]]
             {
                 check_gc(8 * MB);
             }
         }
 
-        check_gc(32 * MB);
-
-        phase();
-
-        report();
-    }
-
-    void loop()
-    {
-        std::cout << "Data is ready, start looping and wait to be terminated!" << std::endl;
-        std::cout.flush();
-        while (true)
+        for (i = 0; i < max; i += 2)
         {
-            volatile int dummy;
-            for (uint64_t i = 0; i <= 1024; ++i)
-            {
-                // The loop slows down the program
-                for (i = 0; i <= 1000; ++i)
-                    dummy = i;
-
-                store.del(TEST_MAX + i);
-
-                for (i = 0; i <= 1000; ++i)
-                    dummy = i;
-
-                store.put(TEST_MAX + i, std::string(1024, '.'));
-
-                for (i = 0; i <= 1000; ++i)
-                    dummy = i;
-
-                store.put(TEST_MAX + i, std::string(512, 'x'));
-            }
-        }
-    }
-
-    void test()
-    {
-        std::cout << "KVStore Persistence Test" << std::endl;
-        std::cout << "<<Test Mode>>" << std::endl;
-        uint64_t i;
-        // Test data
-        for (i = 0; i < TEST_MAX; ++i)
-        {
-            if (i % GC_TRIGGER == 0) [[unlikely]]
-            {
-                check_gc(16 * MB);
-            }
-            std::string result;
-            switch (i & 3)
+            switch (i % 3)
             {
                 case 0:
-                    result = store.get(i);
-                    EXPECT(std::string(i + 1, 't'), store.get(i));
+                    EXPECT(std::string(i + 1, 'e'), store.get(i));
                     break;
                 case 1:
-                    result = store.get(i);
-                    EXPECT(std::string(i + 1, 't'), store.get(i));
+                    EXPECT(std::string(i + 1, '2'), store.get(i));
                     break;
                 case 2:
-                    result = store.get(i);
-                    EXPECT(not_found, store.get(i));
-                    break;
-                case 3:
-                    result = store.get(i);
-                    EXPECT(std::string(i + 1, 's'), store.get(i));
+                    EXPECT(std::string(i + 1, '3'), store.get(i));
                     break;
                 default:
                     assert(0);
             }
+
+            store.del(i);
+
+            if (((i - 1) / 2) % gc_trigger == 0) [[unlikely]]
+            {
+                check_gc(32 * MB);
+            }
+        }
+
+        for (i = 0; i < max; ++i)
+        {
+            EXPECT(not_found, store.get(i));
         }
 
         phase();
@@ -153,70 +191,39 @@ public:
         report();
     }
 
-    PersistenceTest(const std::string &dir, const std::string &vlog, bool v = true) : Test(dir, vlog, v)
+public:
+    CorrectnessTest(const std::string &dir, const std::string &vlog, bool v = true) : Test(dir, vlog, v)
     {
+    }
+
+    void start_test(void *args = NULL) override
+    {
+//        std::cout << "KVStore Correctness Test" << std::endl;
+//
+//        store.reset();
+//
+//        std::cout << "[Simple Test]" << std::endl;
+//        regular_test(SIMPLE_TEST_MAX);
+//
+//        store.reset();
+//
+//        std::cout << "[Large Test]" << std::endl;
+//        regular_test(LARGE_TEST_MAX);
+
+        store.reset();
+
+        std::cout << "[GC Test]" << std::endl;
+        gc_test(GC_TEST_MAX);
     }
 };
 
-void sigusr1Handler(int sig)
-{
-}
-
 int main(int argc, char *argv[])
 {
-//    bool verbose = (argc == 2 && std::string(argv[1]) == "-v");
 
-    std::cout << "Usage: " << argv[0] << " [-v]" << std::endl;
-    std::cout << "  -v: print extra info for failed tests [currently ";
-//    std::cout << (verbose ? "ON" : "OFF") << "]" << std::endl;
-    std::cout << std::endl;
-    std::cout.flush();
 
-    if (signal(SIGUSR1, sigusr1Handler) == SIG_ERR)
-    {
-        perror("signalhandler");
-        return -1;
-    }
+    CorrectnessTest test("./data", "./data/vlog", 0);
 
-    pid_t pid = fork();
-
-    if (pid == 0)
-    {
-        PersistenceTest test("./data", "./data/vlog");
-
-        // The child process first prepared data for testing
-        test.prepare();
-
-        // Wake up parent process to randomly terminate child process
-        kill(getppid(), SIGUSR1);
-
-        test.loop();
-    }
-    else if (pid > 0)
-    {
-        pause();
-
-        // After being waken up, wait random time to kill child process
-        std::random_device rd;
-
-       std::mt19937 gen(rd());
-        std::uniform_int_distribution<int> dis(1000, 5000);
-        int wait_time = dis(gen);
-        usleep(1000 * wait_time);
-        kill(pid, SIGINT);
-        printf("Killing loop after %d ms.\n", wait_time);
-        std::cout << std::endl;
-
-        PersistenceTest test("./data", "./data/vlog");
-
-        // test for data integrity
-        test.test();
-    }
-    else
-    {
-        perror("fork");
-        return -1;
-    }
+    test.start_test();
 
     return 0;
 }
